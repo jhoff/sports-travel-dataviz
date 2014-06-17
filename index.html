@@ -10,20 +10,21 @@
     var api_url = "http://gen2host.net:8888",
         animationSpeed = 1,
         animationResolution = 300,
+        isMobile,
         map;
 
     /**
      * OnLoad, setup the map, dropdowns and load
      */
     $(function(){
+      // if we're on a small screen, we need to disable some features
+      isMobile = ( $(window).width() <= 480 );
+      
       map = new travelMap();
 
-      setupDropdowns([
-        // id       url                         triggeredBy  reset
-        [ 'league',  '/leagues',                                      ],
-        [ 'season', '/[league]/seasons',        'league',     'team'  ],
-        [ 'team',   '/[league]/[season]/teams', 'season'             ]
-      ]);
+      setupDropdown('league','/leagues');
+      setupDropdown('season','/[league]/seasons','league','team');
+      setupDropdown('team','/[league]/[season]/teams','season');
 
       $('#team').on( 'change', function() {
         $('#loadmask').fadeIn({duration:100,queue:false});
@@ -119,9 +120,11 @@
 
           var dest = this.points[schedule[i+1]];
 
-          // make a new line, that starts and ends at the departure point
+          // make a new line
+          // if on mobile, just draw the full thing
+          // otherwise, only make a line that starts and ends at the departure point so we can animate it
           this.lines[i] = new google.maps.Polyline({
-            path: [dep,dep],
+            path: ( isMobile ? [dep,dest] : [dep,dep] ),
             geodesic: true,
             strokeColor: '#FF0000',
             strokeOpacity: 0.5,
@@ -130,33 +133,39 @@
           });
 
           totalDistance += this.calculateDistance( dep.lat(), dep.lng(), dest.lat(), dest.lng() );
+          
+          if( isMobile ) {
+            updateTotalDistance( totalDistance );
+          }
         }
 
-        // animate each line and the distance
-        animationInterval = setInterval(function() {
-          step++;
-          if( step > animationResolution ) {
-            clearInterval(animationInterval);
-          } else {
-            updateTotalDistance( totalDistance, step / animationResolution );
-            for( var i in schedule ) {
-              i = parseInt(i, 10);
-              if( i === schedule.length - 1 ) { continue; }
+        // If we're not on mobile, animate each line and the distance
+        if( !isMobile ) {
+          animationInterval = setInterval(function() {
+            step++;
+            if( step > animationResolution ) {
+              clearInterval(animationInterval);
+            } else {
+              updateTotalDistance( totalDistance, step / animationResolution );
+              for( var i in schedule ) {
+                i = parseInt(i, 10);
+                if( i === schedule.length - 1 ) { continue; }
 
-              var dep  = this.points[schedule[i]],
-                  dest = this.points[schedule[i+1]];
+                var dep  = this.points[schedule[i]],
+                    dest = this.points[schedule[i+1]];
 
-              this.lines[i].setPath([
-                dep,
-                google.maps.geometry.spherical.interpolate(
+                this.lines[i].setPath([
                   dep,
-                  dest,
-                  step / animationResolution
-                )
-              ]);
+                  google.maps.geometry.spherical.interpolate(
+                    dep,
+                    dest,
+                    step / animationResolution
+                  )
+                ]);
+              }
             }
-          }
-        }.bind(this), animationSpeed);
+          }.bind(this), animationSpeed);
+        }
       }
       
       pointFailed = function() {
@@ -208,24 +217,22 @@
       return x1 + x2;
     }
 
-    function setupDropdowns( arr ) {
-      var setup = function( id, url, triggeredBy, reset ) {
-        var func = function() {
-          if( reset ) { onDropdownData( reset )([]); }
-          $('#loadmask').fadeIn({duration:100,queue:false});
-          $.getJSON(
-            getUrl( url ),
-            onDropdownData( id )
-          );
-        };
-        if( triggeredBy ) {
-          $('#' + triggeredBy).change(func);
-        } else {
-          func();
-        }
+    function setupDropdown( id, url, triggeredBy, reset ) {
+      triggeredBy = triggeredBy || false;
+      reset = reset || false;
+
+      var func = function() {
+        if( reset ) { onDropdownData( reset )([]); }
+        $('#loadmask').fadeIn({duration:100,queue:false});
+        $.getJSON(
+          getUrl( url ),
+          onDropdownData( id )
+        );
       };
-      for( var i in arr ) {
-        setup.apply(this, arr[i] );
+      if( triggeredBy ) {
+        $('#' + triggeredBy).change(func);
+      } else {
+        func();
       }
     }
 
@@ -281,16 +288,23 @@
     }
     body {
       height: 100%; margin: 0; padding: 0; position: relative;
+      display: table;
+      width: 100%;
+    }
+    #map-wrapper {
+      display: table-row;
+      width: 100%;
+      height: 100%;
     }
     #map-canvas {
-      height: 100%
+      height: 100%;
+      width: 100%;
     }
     #navigation { 
       background: rgba(255,255,255,0.9);
       border-bottom-left-radius: 6px;
       border-bottom-right-radius: 6px;
       left: 90px;
-      padding: 10px;
       position: absolute;
       top: 0;
       width: 300px;
@@ -300,7 +314,7 @@
       display: block;
     }
     #navigation > * {
-      margin-bottom: 10px;
+      margin: 10px;
     }
     #loadmask {
       display: none;
@@ -319,10 +333,21 @@
       bottom: 10px;
       right: 10px;
     }
+    @media screen
+    and (max-width : 480px) {
+      #navigation {
+        position: static;
+        display: table-row;
+        border-radius: 0px;
+        height: 0px;
+      }
+      #distance {
+        height: 1em;
+      }
+    }
   </style>
 </head>
 <body id="body">
-  <div id="map-canvas"></div>
   <div id="navigation">
     <label>League: 
       <select id="league">
@@ -341,8 +366,11 @@
     </label>
     <div id="distance"></div>
   </div>
-    <div id="loadmask">
-      <img id="spinner" src="spinner.gif"></span>
-    </div>
+  <div id="loadmask">
+    <img id="spinner" src="spinner.gif"></span>
+  </div>
+  <div id="map-wrapper">
+    <div id="map-canvas"></div>
+  </div>
 </body>
 </html>
