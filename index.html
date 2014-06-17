@@ -8,8 +8,7 @@
   <script type="text/javascript" src="https://maps.googleapis.com/maps/api/js?libraries=geometry&key=AIzaSyBqdtgm0QQ-GgwjWM6uHhajfPV-M5Oew8Y"></script>
   <script type="text/javascript">
     var api_url = "http://gen2host.net:8888",
-        animationSpeed = 1,
-        animationResolution = 300,
+        animationDuration = 3,
         isMobile,
         map;
 
@@ -103,6 +102,7 @@
         $('#loadmask').fadeOut({duration:100,queue:false});
 
         this.clearMap();
+        this.totalDistance = 0;
 
         // foreach destination on the schedule
         for( var i in schedule ) {
@@ -112,7 +112,8 @@
           // add a marker
           this.markers.push(new google.maps.Marker({
             position: dep,
-            map: this.map
+            map: this.map,
+            animation: google.maps.Animation.DROP
           }));
 
           // since we use look ahead to calculate distance, we don't want to look at the last element
@@ -132,39 +133,14 @@
             map: this.map
           });
 
-          totalDistance += this.calculateDistance( dep.lat(), dep.lng(), dest.lat(), dest.lng() );
-          
-          if( isMobile ) {
-            updateTotalDistance( totalDistance );
-          }
+          this.totalDistance += this.calculateDistance( dep.lat(), dep.lng(), dest.lat(), dest.lng() );
         }
 
-        // If we're not on mobile, animate each line and the distance
-        if( !isMobile ) {
-          animationInterval = setInterval(function() {
-            step++;
-            if( step > animationResolution ) {
-              clearInterval(animationInterval);
-            } else {
-              updateTotalDistance( totalDistance, step / animationResolution );
-              for( var i in schedule ) {
-                i = parseInt(i, 10);
-                if( i === schedule.length - 1 ) { continue; }
-
-                var dep  = this.points[schedule[i]],
-                    dest = this.points[schedule[i+1]];
-
-                this.lines[i].setPath([
-                  dep,
-                  google.maps.geometry.spherical.interpolate(
-                    dep,
-                    dest,
-                    step / animationResolution
-                  )
-                ]);
-              }
-            }
-          }.bind(this), animationSpeed);
+        // If we're on mobile, just update the distance, otherwise start the animation
+        if( isMobile ) {
+          updateTotalDistance( totalDistance );
+        } else {
+          this.startAnimatingPath( schedule );
         }
       }
       
@@ -172,6 +148,39 @@
         alert( 'Something bad happened!' );
       }
     };
+
+    travelMap.prototype.startAnimatingPath = function( schedule ) {
+      var animationStart = Date.now();
+      this.animloop(function() {
+        var d = Date.now() - animationStart;
+        if( d > ( animationDuration * 1000 ) ) {
+          return false;
+        } else {
+          updateTotalDistance( this.totalDistance, d / ( animationDuration * 1000 ) );
+          for( var i in schedule ) {
+            i = parseInt(i, 10);
+            if( i === schedule.length - 1 ) { continue; }
+
+            var dep  = this.points[schedule[i]],
+                dest = this.points[schedule[i+1]];
+
+            this.lines[i].setPath([
+              dep,
+              google.maps.geometry.spherical.interpolate(
+                dep,
+                dest,
+                d / ( animationDuration * 1000 )
+              )
+            ]);
+          }
+        }
+      }.bind(this));
+    }
+
+    travelMap.prototype.animloop = function( callback ){
+      var requestId = requestAnimationFrame(this.animloop.bind(this,callback));
+      if( callback() === false ) { cancelAnimationFrame(requestId); }
+    }
 
     travelMap.prototype.clearMap = function() {
       $('#distance').html('');
@@ -280,6 +289,30 @@
       }
       return api_url + url;
     }
+
+    // https://github.com/darius/requestAnimationFrame
+    (function() {
+      'use strict';
+    
+      var vendors = ['webkit', 'moz'];
+      for (var i = 0; i < vendors.length && !window.requestAnimationFrame; ++i) {
+        var vp = vendors[i];
+        window.requestAnimationFrame = window[vp+'RequestAnimationFrame'];
+        window.cancelAnimationFrame = (window[vp+'CancelAnimationFrame']
+                                   || window[vp+'CancelRequestAnimationFrame']);
+      }
+      if (/iP(ad|hone|od).*OS 6/.test(window.navigator.userAgent) // iOS6 is buggy
+        || !window.requestAnimationFrame || !window.cancelAnimationFrame) {
+        var lastTime = 0;
+        window.requestAnimationFrame = function(callback) {
+          var now = Date.now();
+          var nextTime = Math.max(lastTime + 16, now);
+          return setTimeout(function() { callback(lastTime = nextTime); },
+                            nextTime - now);
+        };
+        window.cancelAnimationFrame = clearTimeout;
+      }
+    }());
 
   </script>
   <style type="text/css">
