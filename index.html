@@ -35,6 +35,9 @@
 
     });
 
+    /**
+     * Control functions for all map interaction
+     */
     function travelMap() {
       this.map = new google.maps.Map( document.getElementById("map-canvas") );
       this.points = {};
@@ -50,6 +53,9 @@
       this.map.setCenter(bounds.getCenter());
     }
 
+    /**
+     * caches a point on the map
+     */
     travelMap.prototype.addPoint = function( address, lat, lng ) {
       this.points[address] = new google.maps.LatLng(lat,lng);
     };
@@ -60,22 +66,33 @@
     travelMap.prototype.drawSchedule = function( schedule ) {
       var pointWatch, pointFailed, drawFlightPath;
 
+      /**
+       * For each in the schedule, do a reverse geocode of the address to retrieve the latitude and longitude
+       */
       for( var i in schedule ) {
         var address = schedule[i];
         // if we don't have the point cached already, fire off a request for one
         if( !this.points[address] ) {
           this.points[address] = 'loading';
           (function(address) {
-            $.getJSON('https://maps.googleapis.com/maps/api/geocode/json?address=' + encodeURIComponent(address) + '&key=AIzaSyBqdtgm0QQ-GgwjWM6uHhajfPV-M5Oew8Y', null, function (data) {
-              var p = data.results[0].geometry.location;
-              this.addPoint( address, p.lat, p.lng );
-            }.bind(this));
+            $.ajax({
+              dataType: "json",
+              url: 'https://maps.googleapis.com/maps/api/geocode/json?address=' + encodeURIComponent(address) + '&key=AIzaSyBqdtgm0QQ-GgwjWM6uHhajfPV-M5Oew8Y',
+              context: this,
+              success: function( data ) {
+                var p = data.results[0].geometry.location;
+                this.addPoint( address, p.lat, p.lng );
+              },
+              error: function( jqXHR, textStatus, errorThrown ) {
+                this.points[ address ] = 'failed';
+              }
+            });
           }.bind(this))(address);
         }
       }
 
       /**
-       * Waits for all points to load
+       * Waits for all geocode requests to finish
        */
       pointWatch = setInterval( function() {
         var done = true;
@@ -90,7 +107,9 @@
       }.bind(this), 50);
 
       /**
-       * Called when all points have been loaded
+       * Draw the flight Path using the geocode data
+       *
+       * Called when all geocode requests have finished
        */
       drawFlightPath = function() {
         var path = [],
@@ -151,6 +170,9 @@
       }
     };
 
+    /**
+     * Begins animation of all of the paths on the schedule
+     */
     travelMap.prototype.startAnimatingPath = function( schedule ) {
       var animationStart = Date.now();
       this.animloop(function() {
@@ -179,11 +201,17 @@
       }.bind(this));
     }
 
+    /**
+     * Animation loop
+     */
     travelMap.prototype.animloop = function( callback ){
       var requestId = requestAnimationFrame(this.animloop.bind(this,callback));
       if( callback() === false ) { cancelAnimationFrame(requestId); }
     }
 
+    /**
+     * Resets all of the content on the mpa
+     */
     travelMap.prototype.clearMap = function() {
       $('#distance').html('');
       for( var i in this.markers ) {
@@ -194,7 +222,12 @@
       }
     }
 
-    // http://stackoverflow.com/questions/27928/how-do-i-calculate-distance-between-two-latitude-longitude-points
+    /**
+     * Implementation of the Haversine Formula ( http://en.wikipedia.org/wiki/Haversine_formula )
+     *   http://stackoverflow.com/questions/27928/how-do-i-calculate-distance-between-two-latitude-longitude-points
+     *
+     * @return float distance in miles
+     */
     travelMap.prototype.calculateDistance = function( lat1, lon1, lat2, lon2 ) {
       function deg2rad(deg) { return deg * (Math.PI/180); }
       var R = 6371; // Radius of the earth in km
@@ -210,12 +243,20 @@
       return d * 0.621371; // Distance in miles
     }
 
+    /**
+     * Updates the distance on the page, with an optional interval between 0 and 1
+     */
     function updateTotalDistance( d, int ) {
       int = int || 1;
       $('#distance').html( '<b>Approx. Travel Distance (mi):</b> ' + addCommas( Math.round( ( d * int ) * 100) / 100 ) );
     }
 
-    // http://www.mredkj.com/javascript/numberFormat.html
+    /**
+     * Adds commas to a number
+     *   http://www.mredkj.com/javascript/numberFormat.html
+     *
+     * @return string formatted number
+     */
     function addCommas( nStr ) {
       nStr += '';
       var x = nStr.split('.'),
@@ -228,6 +269,9 @@
       return x1 + x2;
     }
 
+    /**
+     * Builds all of the functionality for a given dropdown
+     */
     function setupDropdown( id, url, triggeredBy, reset ) {
       triggeredBy = triggeredBy || false;
       reset = reset || false;
@@ -247,6 +291,9 @@
       }
     }
 
+    /**
+     * Returns a function that JSON data is passed to to build a dropdown
+     */
     function onDropdownData( id, reset ) {
       return function( data ) {
         $('#loadmask').fadeOut({duration:100,queue:false});
@@ -277,9 +324,11 @@
 
         $('#' + id).empty().append(options);
       };
-
     };
 
+    /**
+     * Fetches an API url, replacing [variables] dynamically
+     */
     function getUrl( base ) {
       var regexp = /\/\[([^\/]*)\]/g,
           match = regexp.exec(base),
@@ -292,7 +341,10 @@
       return api_url + url;
     }
 
-    // https://github.com/darius/requestAnimationFrame
+    /**
+     * requestAnimationFrame shim
+     *   https://github.com/darius/requestAnimationFrame
+     */
     (function() {
       'use strict';
     
