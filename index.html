@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta http-equiv="Content-type" content="text/html; charset=utf-8">
+  <meta name="viewport" content="initial-scale=1.0, user-scalable=no" />
+  <title>Pro sport travel visualization</title>
+  <script src="//ajax.googleapis.com/ajax/libs/jquery/1.11.1/jquery.min.js"></script>
+  <script type="text/javascript" src="https://maps.googleapis.com/maps/api/js?libraries=geometry&key=AIzaSyBqdtgm0QQ-GgwjWM6uHhajfPV-M5Oew8Y"></script>
+  <script type="text/javascript">
+    var api_url = "http://gen2host.net:8888",
+        animationSpeed = 1,
+        animationResolution = 300,
+        map;
+
+    /**
+     * OnLoad, setup the map, dropdowns and load
+     */
+    $(function(){
+      map = new travelMap();
+
+      setupDropdowns([
+        // id       url                         triggeredBy  reset
+        [ 'league',  '/leagues',                                      ],
+        [ 'season', '/[league]/seasons',        'league',     'team'  ],
+        [ 'team',   '/[league]/[season]/teams', 'season'             ]
+      ]);
+
+      $('#team').on( 'change', function() {
+        $('#loadmask').fadeIn({duration:100,queue:false});
+        $.getJSON(
+          getUrl( '/[league]/[season]/[team]' ),
+          $.proxy( map.drawSchedule, map )
+        );
+      });
+
+    });
+
+    function travelMap() {
+      this.map = new google.maps.Map( document.getElementById("map-canvas") );
+      this.points = {};
+      this.markers = [];
+      this.lines = [];
+
+      var bounds = new google.maps.LatLngBounds();
+
+      bounds.extend(new google.maps.LatLng(25.6234321,-67.6044244));
+      bounds.extend(new google.maps.LatLng(48.995743,-124.7329461));
+
+      this.map.fitBounds(bounds);
+      this.map.setCenter(bounds.getCenter());
+    }
+
+    travelMap.prototype.addPoint = function( address, lat, lng ) {
+      this.points[address] = new google.maps.LatLng(lat,lng);
+    };
+
+    /**
+     * Takes a list of addresses, geocodes any that aren't already cached and displays a flightplan
+     */
+    travelMap.prototype.drawSchedule = function( schedule ) {
+      var pointWatch, pointFailed, drawFlightPath;
+
+      for( var i in schedule ) {
+        var address = schedule[i];
+        // if we don't have the point cached already, fire off a request for one
+        if( !this.points[address] ) {
+          this.points[address] = 'loading';
+          (function(address) {
+            $.getJSON('https://maps.googleapis.com/maps/api/geocode/json?address=' + encodeURIComponent(address) + '&key=AIzaSyBqdtgm0QQ-GgwjWM6uHhajfPV-M5Oew8Y', null, function (data) {
+              var p = data.results[0].geometry.location;
+              this.addPoint( address, p.lat, p.lng );
+            }.bind(this));
+          }.bind(this))(address);
+        }
+      }
+
+      /**
+       * Waits for all points to load
+       */
+      pointWatch = setInterval( function() {
+        var done = true;
+        for( var i in this.points ) {
+          if( this.points[i] === 'failed' ) { pointFailed(); }
+          if( this.points[i] === 'loading' ) { done = false; }
+        }
+        if( done ) {
+          clearInterval( pointWatch );
+          drawFlightPath.call(this);
+        }
+      }.bind(this), 50);
+
+      /**
+       * Called when all points have been loaded
+       */
+      drawFlightPath = function() {
+        var path = [],
+            bounds = new google.maps.LatLngBounds(),
+            step = 0,
+            animationInterval,
+            totalDistance = 0;
+
+        $('#loadmask').fadeOut({duration:100,queue:false});
+
+        this.clearMap();
+
+        // foreach destination on the schedule
+        for( var i in schedule ) {
+          i = parseInt(i, 10);
+          var dep = this.points[schedule[i]];
+
+          // add a marker
+          this.markers.push(new google.maps.Marker({
+            position: dep,
+            map: this.map
+          }));
+
+          // since we use look ahead to calculate distance, we don't want to look at the last element
+          if( i === schedule.length - 1 ) { continue; }
+
+          var dest = this.points[schedule[i+1]];
+
+          // make a new line, that starts and ends at the departure point
+          this.lines[i] = new google.maps.Polyline({
+            path: [dep,dep],
+            geodesic: true,
+            strokeColor: '#FF0000',
+            strokeOpacity: 0.5,
+            strokeWeight: 2,
+            map: this.map
+          });
+
+          totalDistance += this.calculateDistance( dep.lat(), dep.lng(), dest.lat(), dest.lng() );
+        }
+
+        // animate each line and the distance
+        animationInterval = setInterval(function() {
+          step++;
+          if( step > animationResolution ) {
+            clearInterval(animationInterval);
+          } else {
+            updateTotalDistance( totalDistance, step / animationResolution );
+            for( var i in schedule ) {
+              i = parseInt(i, 10);
+              if( i === schedule.length - 1 ) { continue; }
+
+              var dep  = this.points[schedule[i]],
+                  dest = this.points[schedule[i+1]];
+
+              this.lines[i].setPath([
+                dep,
+                google.maps.geometry.spherical.interpolate(
+                  dep,
+                  dest,
+                  step / animationResolution
+                )
+              ]);
+            }
+          }
+        }.bind(this), animationSpeed);
+      }
+      
+      pointFailed = function() {
+        alert( 'Something bad happened!' );
+      }
+    };
+
+    travelMap.prototype.clearMap = function() {
+      $('#distance').html('');
+      for( var i in this.markers ) {
+        this.markers[i].setMap(null);
+      }
+      for( var i in this.lines ) {
+        this.lines[i].setMap(null);
+      }
+    }
+
+    // http://stackoverflow.com/questions/27928/how-do-i-calculate-distance-between-two-latitude-longitude-points
+    travelMap.prototype.calculateDistance = function( lat1, lon1, lat2, lon2 ) {
+      function deg2rad(deg) { return deg * (Math.PI/180); }
+      var R = 6371; // Radius of the earth in km
+      var dLat = deg2rad(lat2-lat1);  // deg2rad below
+      var dLon = deg2rad(lon2-lon1); 
+      var a = 
+        Math.sin(dLat/2) * Math.sin(dLat/2) +
+        Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) * 
+        Math.sin(dLon/2) * Math.sin(dLon/2)
+        ; 
+      var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
+      var d = R * c; // Distance in km
+      return d * 0.621371; // Distance in miles
+    }
+
+    function updateTotalDistance( d, int ) {
+      int = int || 1;
+      $('#distance').html( '<b>Approx. Travel Distance (mi):</b> ' + addCommas( Math.round( ( d * int ) * 100) / 100 ) );
+    }
+
+    // http://www.mredkj.com/javascript/numberFormat.html
+    function addCommas( nStr ) {
+      nStr += '';
+      var x = nStr.split('.'),
+          x1 = x[0],
+          x2 = x.length > 1 ? '.' + x[1] : '',
+          rgx = /(\d+)(\d{3})/;
+      while (rgx.test(x1)) {
+        x1 = x1.replace(rgx, '$1' + ',' + '$2');
+      }
+      return x1 + x2;
+    }
+
+    function setupDropdowns( arr ) {
+      var setup = function( id, url, triggeredBy, reset ) {
+        var func = function() {
+          if( reset ) { onDropdownData( reset )([]); }
+          $('#loadmask').fadeIn({duration:100,queue:false});
+          $.getJSON(
+            getUrl( url ),
+            onDropdownData( id )
+          );
+        };
+        if( triggeredBy ) {
+          $('#' + triggeredBy).change(func);
+        } else {
+          func();
+        }
+      };
+      for( var i in arr ) {
+        setup.apply(this, arr[i] );
+      }
+    }
+
+    function onDropdownData( id, reset ) {
+      return function( data ) {
+        $('#loadmask').fadeOut({duration:100,queue:false});
+        var options = ['<option>---</option>'],
+            isArray = ( data instanceof Array );
+
+        data = (function( d ) {
+          var ret = [];
+          for( var i in d ) {
+            ret.push([i,d[i]]);
+          }
+          ret.sort(function(a, b) {
+            if (a[1] < b[1]) return -1;
+            if (a[1] > b[1]) return 1;
+            return 0;
+          });
+          return ret;
+        }(data));
+
+        for( var i in data ) {
+          if( isArray ) {
+            options.push('<option value="' + data[i][1] + '">' + data[i][1].toUpperCase() + '</option>');
+          } else {
+            options.push('<option value="' + data[i][0] + '">' + data[i][1] + '</option>');
+          }
+          
+        }
+
+        $('#' + id).empty().append(options);
+      };
+
+    };
+
+    function getUrl( base ) {
+      var regexp = /\/\[([^\/]*)\]/g,
+          match = regexp.exec(base),
+          url = base;
+      while (match != null) {
+        var value = $('#' + match[1]).val();
+        url = url.replace( '[' + match[1] + ']', value );
+        match = regexp.exec(base);
+      }
+      return api_url + url;
+    }
+
+  </script>
+  <style type="text/css">
+    html {
+      height: 100%
+    }
+    body {
+      height: 100%; margin: 0; padding: 0; position: relative;
+    }
+    #map-canvas {
+      height: 100%
+    }
+    #navigation { 
+      background: rgba(255,255,255,0.9);
+      border-bottom-left-radius: 6px;
+      border-bottom-right-radius: 6px;
+      left: 90px;
+      padding: 10px;
+      position: absolute;
+      top: 0;
+      width: 300px;
+      z-index: 2;
+    }
+    #navigation label {
+      display: block;
+    }
+    #navigation > * {
+      margin-bottom: 10px;
+    }
+    #loadmask {
+      display: none;
+      background: rgba(0,0,0,0.2);
+      left: 0;
+      position: absolute;
+      top: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+    }
+    #spinner {
+      height: 50px;
+      width: 50px;
+      position: absolute;
+      bottom: 10px;
+      right: 10px;
+    }
+  </style>
+</head>
+<body id="body">
+  <div id="map-canvas"></div>
+  <div id="navigation">
+    <label>League: 
+      <select id="league">
+        <option>---</option>
+      </select>
+    </label>
+    <label>Season:
+      <select id="season">
+        <option>---</option>
+      </select>
+    </label>
+    <label>Team:
+      <select id="team">
+        <option>---</option>
+      </select>
+    </label>
+    <div id="distance"></div>
+  </div>
+    <div id="loadmask">
+      <img id="spinner" src="spinner.gif"></span>
+    </div>
+</body>
+</html>
