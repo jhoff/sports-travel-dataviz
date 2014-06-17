@@ -107,12 +107,14 @@
         // foreach destination on the schedule
         for( var i in schedule ) {
           i = parseInt(i, 10);
-          var dep = this.points[schedule[i]];
+          var dep = this.points[schedule[i]],
+              pinScale = ( isMobile ? 0.3 : 0.5 );
 
           // add a marker
           this.markers.push(new google.maps.Marker({
             position: dep,
             map: this.map,
+            icon: 'https://chart.googleapis.com/chart?chst=d_map_spin&chld=' + pinScale + '%7C0%7CFF0000%7C000000',
             animation: google.maps.Animation.DROP
           }));
 
