@@ -7,18 +7,14 @@
   <script src="//ajax.googleapis.com/ajax/libs/jquery/1.11.1/jquery.min.js"></script>
   <script type="text/javascript" src="https://maps.googleapis.com/maps/api/js?libraries=geometry&key=AIzaSyBqdtgm0QQ-GgwjWM6uHhajfPV-M5Oew8Y"></script>
   <script type="text/javascript">
-    var api_url = "http://gen2host.net:8888",
-        animationDuration = 3,
-        isMobile,
+    var api_url = "http://localhost:8888",
+        animationDuration = 2,
         map;
 
     /**
      * OnLoad, setup the map, dropdowns and load
      */
     $(function(){
-      // if we're on a small screen, we need to disable some features
-      isMobile = ( $(window).width() <= 480 );
-      
       map = new travelMap();
 
       setupDropdown('league','/leagues');
@@ -54,23 +50,19 @@
     }
 
     /**
-     * caches a point on the map
-     */
-    travelMap.prototype.addPoint = function( address, lat, lng ) {
-      this.points[address] = new google.maps.LatLng(lat,lng);
-    };
-
-    /**
      * Takes a list of addresses, geocodes any that aren't already cached and displays a flightplan
      */
-    travelMap.prototype.drawSchedule = function( schedule ) {
-      var pointWatch, pointFailed, drawFlightPath;
+    travelMap.prototype.drawSchedule = function( data ) {
+      var pointWatch, drawFlightPath,
+          schedule = data.travel,
+          venues = data.venues;
 
       /**
-       * For each in the schedule, do a reverse geocode of the address to retrieve the latitude and longitude
+       * For each venue, do a reverse geocode of the address to retrieve the latitude and longitude
        */
-      for( var i in schedule ) {
-        var address = schedule[i];
+      for( var address in venues ) {
+        if( !venues.hasOwnProperty(address) ) { continue; }
+
         // if we don't have the point cached already, fire off a request for one
         if( !this.points[address] ) {
           this.points[address] = 'loading';
@@ -80,8 +72,12 @@
               url: 'https://maps.googleapis.com/maps/api/geocode/json?address=' + encodeURIComponent(address) + '&key=AIzaSyBqdtgm0QQ-GgwjWM6uHhajfPV-M5Oew8Y',
               context: this,
               success: function( data ) {
-                var p = data.results[0].geometry.location;
-                this.addPoint( address, p.lat, p.lng );
+                if( data.status === 'ZERO_RESULTS' ) {
+                  this.points[address] = 'failed';
+                } else {
+                  var p = data.results[0].geometry.location;
+                  this.points[address] = new google.maps.LatLng(p.lat,p.lng);
+                }
               },
               error: function( jqXHR, textStatus, errorThrown ) {
                 this.points[ address ] = 'failed';
@@ -97,8 +93,12 @@
       pointWatch = setInterval( function() {
         var done = true;
         for( var i in this.points ) {
-          if( this.points[i] === 'failed' ) { pointFailed(); }
+          if( !this.points.hasOwnProperty(i) ) { continue; }
           if( this.points[i] === 'loading' ) { done = false; }
+          if( this.points[i] === 'failed' ) {
+            console.error( 'Failed to load ' + address + '!' );
+            done = true;
+          }
         }
         if( done ) {
           clearInterval( pointWatch );
@@ -116,37 +116,65 @@
             bounds = new google.maps.LatLngBounds(),
             step = 0,
             animationInterval,
-            totalDistance = 0;
+            pinScale = ( isMobile() ? 0.3 : 0.5 ),
+            homeMarkerColor = '0000FF',
+            awayMarkerColor = 'FF0000';
 
         $('#loadmask').fadeOut({duration:100,queue:false});
 
         this.clearMap();
         this.totalDistance = 0;
+        this.gameCount = 0;
 
-        // foreach destination on the schedule
+        // foreach venue, draw a marker
+        for( var address in venues ) {
+          if( !venues.hasOwnProperty(address) ) { continue; }
+
+          this.gameCount += venues[address].games.length;
+
+          (function(address,venues) {
+            var markerColor = ( venues[address].homeVenue ? homeMarkerColor : awayMarkerColor );
+
+            var marker = new google.maps.Marker({
+              position: this.points[address],
+              map: this.map,
+              icon: 'https://chart.googleapis.com/chart?chst=d_map_spin&chld=' + pinScale + '%7C0%7C' + markerColor + '%7C000000',
+              animation: google.maps.Animation.DROP
+            });
+
+            google.maps.event.addListener(marker, 'click', function() {
+              if( this.infowindow ) {
+                this.infowindow.close();
+              }
+              
+              this.infowindow = new google.maps.InfoWindow({
+                  content: this.buildVenueStats( venues[address] )
+              });
+                            
+              this.infowindow.open(this.map,marker);
+            }.bind(this));
+
+            this.markers.push( marker );
+          }.bind(this))(address,venues);
+        }
+
+        // create the lines
         for( var i in schedule ) {
-          i = parseInt(i, 10);
-          var dep = this.points[schedule[i]],
-              pinScale = ( isMobile ? 0.3 : 0.5 );
+          if( !schedule.hasOwnProperty(i) ) { continue; }
 
-          // add a marker
-          this.markers.push(new google.maps.Marker({
-            position: dep,
-            map: this.map,
-            icon: 'https://chart.googleapis.com/chart?chst=d_map_spin&chld=' + pinScale + '%7C0%7CFF0000%7C000000',
-            animation: google.maps.Animation.DROP
-          }));
+          i = +i; // cast to integer
 
           // since we use look ahead to calculate distance, we don't want to look at the last element
           if( i === schedule.length - 1 ) { continue; }
 
-          var dest = this.points[schedule[i+1]];
+          var dep = this.points[schedule[i]],
+              dest = this.points[schedule[i+1]];
 
           // make a new line
           // if on mobile, just draw the full thing
           // otherwise, only make a line that starts and ends at the departure point so we can animate it
           this.lines[i] = new google.maps.Polyline({
-            path: ( isMobile ? [dep,dest] : [dep,dep] ),
+            path: ( isMobile() ? [dep,dest] : [dep,dep] ),
             geodesic: true,
             strokeColor: '#FF0000',
             strokeOpacity: 0.5,
@@ -158,17 +186,22 @@
         }
 
         // If we're on mobile, just update the distance, otherwise start the animation
-        if( isMobile ) {
-          updateTotalDistance( this.totalDistance );
+        if( isMobile() ) {
+          this.updateInfo();
         } else {
           this.startAnimatingPath( schedule );
         }
       }
-      
-      pointFailed = function() {
-        alert( 'Something bad happened!' );
-      }
     };
+
+    travelMap.prototype.buildVenueStats = function( venue ) {
+      var loc = venue.market || venue.city + ', ' + ( venue.state || venue.country );
+      return '<div id="venueInfo">'
+          + '<div class="name"</div>' + venue.name + '</div>'
+          + '<div class="location"</div>' + loc + '</div>'
+          + '<div class="games"</div>' + venue.games.length + ' Games</div>'
+          + '</div>';
+    }
 
     /**
      * Begins animation of all of the paths on the schedule
@@ -180,9 +213,10 @@
         if( d > ( animationDuration * 1000 ) ) {
           return false;
         } else {
-          updateTotalDistance( this.totalDistance, d / ( animationDuration * 1000 ) );
+          this.updateInfo( d / ( animationDuration * 1000 ) );
           for( var i in schedule ) {
-            i = parseInt(i, 10);
+            if( !schedule.hasOwnProperty(i) ) { continue; }
+            i = +i; // cast to integer
             if( i === schedule.length - 1 ) { continue; }
 
             var dep  = this.points[schedule[i]],
@@ -210,16 +244,55 @@
     }
 
     /**
+     * Updates the distance on the page, with an optional interval between 0 and 1
+     */
+    travelMap.prototype.updateInfo = function( int ) {
+      int = int || 1;
+
+      var flights = this.lines.length,
+          airports = this.markers.length,
+          games = this.gameCount,
+          dist = this.totalDistance,
+          hours = ( flights / 2 ) + ( dist / 500 ), // 30min per flight + 500miles per hour
+          flightAvg = ( hours / flights );
+
+      $('#info').html( ''
+        + '<div><b>Games:</b> '
+        +   Math.floor( games * int )
+        + '</div>'
+        + '<div><b>Airports:</b> '
+        +   Math.floor( airports * int )
+        + '</div>'
+        + '<div><b>Flights:</b> '
+        +   Math.floor( flights * int )
+        + '</div>'
+        + '<div><b>Distance:</b> '
+        +   addCommas( Math.round( dist * int * 100) / 100 ) + ' mi'
+        + '</div>'
+        + '<div><b>Time in air:</b> '
+        +   toDayHourMin( Math.round( hours * int * 100) / 100 )
+        + '</div>'
+        + '<div><b>Average flight time:</b> '
+        +   toDayHourMin( Math.round( flightAvg * int * 100) / 100 )
+        + '</div>'
+      );
+    }
+
+    /**
      * Resets all of the content on the mpa
      */
     travelMap.prototype.clearMap = function() {
-      $('#distance').html('');
+      $('#info').html('');
       for( var i in this.markers ) {
+        if( !this.markers.hasOwnProperty(i) ) { continue; }
         this.markers[i].setMap(null);
       }
+      this.markers = [];
       for( var i in this.lines ) {
+        if( !this.lines.hasOwnProperty(i) ) { continue; }
         this.lines[i].setMap(null);
       }
+      this.lines = [];
     }
 
     /**
@@ -244,14 +317,6 @@
     }
 
     /**
-     * Updates the distance on the page, with an optional interval between 0 and 1
-     */
-    function updateTotalDistance( d, int ) {
-      int = int || 1;
-      $('#distance').html( '<b>Approx. Travel Distance (mi):</b> ' + addCommas( Math.round( ( d * int ) * 100) / 100 ) );
-    }
-
-    /**
      * Adds commas to a number
      *   http://www.mredkj.com/javascript/numberFormat.html
      *
@@ -267,6 +332,19 @@
         x1 = x1.replace(rgx, '$1' + ',' + '$2');
       }
       return x1 + x2;
+    }
+
+    /**
+     * Takes hours represented as float and returns DD:HH:MM
+     */
+    function toDayHourMin( hours ) {
+      var d = Math.floor( hours / 24 ),
+          h = Math.floor( hours - ( d * 24 ) ),
+          m = Math.floor( ( hours - ( h + ( d * 24 ) ) ) * 60 );
+      d = ( d > 0 ? d + 'd ' : '' );
+      h = ( h > 0 ? h + 'h ' : '' );
+      m = ( m > 0 ? m + 'm ' : '' );
+      return d + h + m;
     }
 
     /**
@@ -303,6 +381,7 @@
         data = (function( d ) {
           var ret = [];
           for( var i in d ) {
+            if( !d.hasOwnProperty(i) ) { continue; }
             ret.push([i,d[i]]);
           }
           ret.sort(function(a, b) {
@@ -314,6 +393,7 @@
         }(data));
 
         for( var i in data ) {
+          if( !data.hasOwnProperty(i) ) { continue; }
           if( isArray ) {
             options.push('<option value="' + data[i][1] + '">' + data[i][1].toUpperCase() + '</option>');
           } else {
@@ -367,6 +447,13 @@
         window.cancelAnimationFrame = clearTimeout;
       }
     }());
+
+    // http://stackoverflow.com/questions/11381673/javascript-solution-to-detect-mobile-browser
+    window.isMobile = function() {
+      var check = false;
+      (function(a){if(/(android|bb\d+|meego).+mobile|avantgo|bada\/|blackberry|blazer|compal|elaine|fennec|hiptop|iemobile|ip(hone|od)|iris|kindle|lge |maemo|midp|mmp|mobile.+firefox|netfront|opera m(ob|in)i|palm( os)?|phone|p(ixi|re)\/|plucker|pocket|psp|series(4|6)0|symbian|treo|up\.(browser|link)|vodafone|wap|windows (ce|phone)|xda|xiino/i.test(a)||/1207|6310|6590|3gso|4thp|50[1-6]i|770s|802s|a wa|abac|ac(er|oo|s\-)|ai(ko|rn)|al(av|ca|co)|amoi|an(ex|ny|yw)|aptu|ar(ch|go)|as(te|us)|attw|au(di|\-m|r |s )|avan|be(ck|ll|nq)|bi(lb|rd)|bl(ac|az)|br(e|v)w|bumb|bw\-(n|u)|c55\/|capi|ccwa|cdm\-|cell|chtm|cldc|cmd\-|co(mp|nd)|craw|da(it|ll|ng)|dbte|dc\-s|devi|dica|dmob|do(c|p)o|ds(12|\-d)|el(49|ai)|em(l2|ul)|er(ic|k0)|esl8|ez([4-7]0|os|wa|ze)|fetc|fly(\-|_)|g1 u|g560|gene|gf\-5|g\-mo|go(\.w|od)|gr(ad|un)|haie|hcit|hd\-(m|p|t)|hei\-|hi(pt|ta)|hp( i|ip)|hs\-c|ht(c(\-| |_|a|g|p|s|t)|tp)|hu(aw|tc)|i\-(20|go|ma)|i230|iac( |\-|\/)|ibro|idea|ig01|ikom|im1k|inno|ipaq|iris|ja(t|v)a|jbro|jemu|jigs|kddi|keji|kgt( |\/)|klon|kpt |kwc\-|kyo(c|k)|le(no|xi)|lg( g|\/(k|l|u)|50|54|\-[a-w])|libw|lynx|m1\-w|m3ga|m50\/|ma(te|ui|xo)|mc(01|21|ca)|m\-cr|me(rc|ri)|mi(o8|oa|ts)|mmef|mo(01|02|bi|de|do|t(\-| |o|v)|zz)|mt(50|p1|v )|mwbp|mywa|n10[0-2]|n20[2-3]|n30(0|2)|n50(0|2|5)|n7(0(0|1)|10)|ne((c|m)\-|on|tf|wf|wg|wt)|nok(6|i)|nzph|o2im|op(ti|wv)|oran|owg1|p800|pan(a|d|t)|pdxg|pg(13|\-([1-8]|c))|phil|pire|pl(ay|uc)|pn\-2|po(ck|rt|se)|prox|psio|pt\-g|qa\-a|qc(07|12|21|32|60|\-[2-7]|i\-)|qtek|r380|r600|raks|rim9|ro(ve|zo)|s55\/|sa(ge|ma|mm|ms|ny|va)|sc(01|h\-|oo|p\-)|sdk\/|se(c(\-|0|1)|47|mc|nd|ri)|sgh\-|shar|sie(\-|m)|sk\-0|sl(45|id)|sm(al|ar|b3|it|t5)|so(ft|ny)|sp(01|h\-|v\-|v )|sy(01|mb)|t2(18|50)|t6(00|10|18)|ta(gt|lk)|tcl\-|tdg\-|tel(i|m)|tim\-|t\-mo|to(pl|sh)|ts(70|m\-|m3|m5)|tx\-9|up(\.b|g1|si)|utst|v400|v750|veri|vi(rg|te)|vk(40|5[0-3]|\-v)|vm40|voda|vulc|vx(52|53|60|61|70|80|81|83|85|98)|w3c(\-| )|webc|whit|wi(g |nc|nw)|wmlb|wonu|x700|yas\-|your|zeto|zte\-/i.test(a.substr(0,4)))check = true})(navigator.userAgent||navigator.vendor||window.opera);
+      return check;
+    }
 
   </script>
   <style type="text/css">
@@ -428,7 +515,7 @@
         border-radius: 0px;
         height: 0px;
       }
-      #distance {
+      #info {
         height: 1em;
       }
     }
@@ -451,7 +538,7 @@
         <option>---</option>
       </select>
     </label>
-    <div id="distance"></div>
+    <div id="info"></div>
   </div>
   <div id="loadmask">
     <img id="spinner" src="spinner.gif"></span>
